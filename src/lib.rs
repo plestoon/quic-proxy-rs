@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use tokio::signal;
 
 use crate::stream_handler::{StreamHandler, StreamHandlerDispatch};
+use crate::stream_handler::http_proxy::AuthConfig;
 use crate::transport::quic::QuicServer;
 use crate::transport::tcp::TcpServer;
 use crate::transport::TransportServer;
@@ -15,8 +16,9 @@ pub async fn run(
     passthrough_url: Option<String>,
     cert_path: Option<String>,
     key_path: Option<String>,
+    auth_config: Option<AuthConfig>,
 ) -> Result<()> {
-    let stream_handler = StreamHandlerDispatch::new(passthrough_url).await?;
+    let stream_handler = StreamHandlerDispatch::new(passthrough_url, auth_config).await?;
     let server = start_server(listen_addr, transport, cert_path, key_path, stream_handler).await?;
 
     signal::ctrl_c().await?;
@@ -43,7 +45,7 @@ async fn start_server(
                 key_path.unwrap().as_str(),
                 stream_handler,
             )
-            .await?,
+                .await?,
         )),
         _ => Err(anyhow!("unknown transport: {}", transport)),
     }
