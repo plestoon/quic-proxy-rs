@@ -27,7 +27,8 @@ impl StreamHandler for HttpProxy {
         let (mut inbound, request_line, mut headers) = parse_request(inbound).await?;
 
         if self.auth_config.is_some() && !authenticate(&self.auth_config.clone().unwrap(), &mut headers).await? {
-            send_407_and_close_transport(&mut inbound).await?;
+            send_407(&mut inbound).await?;
+
             return Ok(());
         }
 
@@ -53,11 +54,10 @@ async fn authenticate(auth_config: &AuthConfig, headers: &mut HashMap<String, St
     }
 }
 
-async fn send_407_and_close_transport(inbound: &mut impl Transport) -> Result<()> {
+async fn send_407(inbound: &mut impl Transport) -> Result<()> {
     inbound
         .write_all("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"QUIC Proxy\"\r\n\r\n".as_bytes())
         .await?;
-    inbound.shutdown().await?;
 
     Ok(())
 }
