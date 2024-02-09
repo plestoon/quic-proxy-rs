@@ -202,7 +202,8 @@ impl QuicClient {
         transport_config.keep_alive_interval(Some(Duration::from_secs(5)));
         config.transport_config(Arc::new(transport_config));
         endpoint.set_default_client_config(config);
-        let connection = endpoint.connect(addr, "localhost")?.await?;
+        let (host, _) = host.split_once(':').unwrap();
+        let connection = endpoint.connect(addr, host)?.await?;
 
         Ok(QuicClient { connection })
     }
