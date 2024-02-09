@@ -166,7 +166,7 @@ impl QuicServer {
                     let transport = QuicTransport::new(send, recv);
                     let stream_handler = stream_handler.clone();
                     tokio::spawn(
-                        async move { stream_handler.handle_stream(transport).await.unwrap() },
+                        async move { stream_handler.handle_stream(transport).await },
                     );
                 }
                 Err(_) => {
