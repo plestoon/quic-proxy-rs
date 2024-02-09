@@ -111,7 +111,7 @@ pub trait TransportServer {
 }
 
 pub trait TransportClient: Send + Sync + Clone + 'static {
-    fn new_transport(&self) -> impl Future<Output = Result<impl Transport>> + Send;
+    fn new_transport(&self) -> impl Future<Output=Result<impl Transport>> + Send;
 }
 
 #[derive(Clone)]
@@ -125,9 +125,11 @@ impl TransportClientDispatch {
         let url = Url::parse(url)?;
         let scheme = url.scheme();
         let host = url.host_str().unwrap();
+        let port = url.port().unwrap();
+        let addr = format!("{}:{}", host, port);
         match scheme {
-            "tcp" => Ok(Self::TcpClient(TcpClient::new(host))),
-            "quic" => Ok(Self::QuicClient(QuicClient::new(host).await?)),
+            "tcp" => Ok(Self::TcpClient(TcpClient::new(&addr))),
+            "quic" => Ok(Self::QuicClient(QuicClient::new(&addr).await?)),
             _ => Err(anyhow!("unknown scheme: {}", scheme)),
         }
     }
