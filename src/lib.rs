@@ -9,6 +9,7 @@ use crate::transport::TransportServer;
 
 pub mod stream_handler;
 pub mod transport;
+pub mod config;
 
 pub async fn run(
     listen_addr: &str,

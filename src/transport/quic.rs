@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use anyhow::Result;
 use pin_project_lite::pin_project;
@@ -16,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::lookup_host;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
+use crate::config::{QUIC_KEEP_ALIVE_INTERNAL, QUIC_MAX_IDLE_TIMEOUT};
 
 use crate::stream_handler::StreamHandler;
 use crate::transport::{TransportClient, TransportServer};
@@ -106,8 +106,8 @@ impl QuicServer {
                     stream_handler,
                     cancellation_token,
                 )
-                .await
-                .unwrap()
+                    .await
+                    .unwrap()
             });
         }
 
@@ -129,7 +129,11 @@ impl QuicServer {
         let mut reader = BufReader::new(File::open(key_path)?);
         let mut keys = rustls_pemfile::pkcs8_private_keys(&mut reader)?;
         let key = rustls::PrivateKey(keys.remove(0));
-        let config = ServerConfig::with_single_cert(certs, key)?;
+        let mut config = ServerConfig::with_single_cert(certs, key)?;
+        let mut transport_config = TransportConfig::default();
+        transport_config.max_idle_timeout(Some(QUIC_MAX_IDLE_TIMEOUT.try_into()?));
+        transport_config.keep_alive_interval(Some(QUIC_KEEP_ALIVE_INTERNAL));
+        config.transport_config(Arc::new(transport_config));
         let endpoint = Endpoint::server(config, listen_addr.parse::<SocketAddr>().unwrap())?;
 
         loop {
@@ -199,7 +203,8 @@ impl QuicClient {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse::<SocketAddr>().unwrap())?;
         let mut config = ClientConfig::with_native_roots();
         let mut transport_config = TransportConfig::default();
-        transport_config.keep_alive_interval(Some(Duration::from_secs(5)));
+        transport_config.max_idle_timeout(Some(QUIC_MAX_IDLE_TIMEOUT.try_into()?));
+        transport_config.keep_alive_interval(Some(QUIC_KEEP_ALIVE_INTERNAL));
         config.transport_config(Arc::new(transport_config));
         endpoint.set_default_client_config(config);
         let (host, _) = host.split_once(':').unwrap();
