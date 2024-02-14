@@ -4,8 +4,9 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Error, Result};
 use pin_project_lite::pin_project;
 use quinn::{
     ClientConfig, Connecting, Connection, Endpoint, RecvStream, SendStream, ServerConfig,
@@ -14,9 +15,11 @@ use quinn::{
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::lookup_host;
 use tokio::select;
+use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use crate::config::{QUIC_KEEP_ALIVE_INTERNAL, QUIC_MAX_IDLE_TIMEOUT};
 
+use crate::config::{QUIC_KEEP_ALIVE_INTERNAL, QUIC_MAX_IDLE_TIMEOUT};
 use crate::stream_handler::StreamHandler;
 use crate::transport::{TransportClient, TransportServer};
 
@@ -106,8 +109,8 @@ impl QuicServer {
                     stream_handler,
                     cancellation_token,
                 )
-                    .await
-                    .unwrap()
+                .await
+                .unwrap()
             });
         }
 
@@ -169,9 +172,7 @@ impl QuicServer {
                 Ok((send, recv)) => {
                     let transport = QuicTransport::new(send, recv);
                     let stream_handler = stream_handler.clone();
-                    tokio::spawn(
-                        async move { stream_handler.handle_stream(transport).await },
-                    );
+                    tokio::spawn(async move { stream_handler.handle_stream(transport).await });
                 }
                 Err(_) => {
                     break;
@@ -191,11 +192,23 @@ impl TransportServer for QuicServer {
 
 #[derive(Clone)]
 pub struct QuicClient {
-    connection: Connection,
+    host: String,
+    connection: Arc<Mutex<Connection>>,
+    recovering: Arc<Mutex<bool>>,
 }
 
 impl QuicClient {
     pub async fn new(host: &str) -> Result<Self> {
+        let connection = Self::new_connection(host).await?;
+
+        Ok(QuicClient {
+            host: host.to_string(),
+            connection: Arc::new(Mutex::new(connection)),
+            recovering: Arc::new(Mutex::new(false)),
+        })
+    }
+
+    async fn new_connection(host: &str) -> Result<Connection> {
         let addr = lookup_host(host)
             .await?
             .find(|addr| addr.is_ipv4())
@@ -210,14 +223,59 @@ impl QuicClient {
         let (host, _) = host.split_once(':').unwrap();
         let connection = endpoint.connect(addr, host)?.await?;
 
-        Ok(QuicClient { connection })
+        Ok(connection)
+    }
+
+    async fn recover_connection(
+        connection: Arc<Mutex<Connection>>,
+        recovering: Arc<Mutex<bool>>,
+        host: String,
+    ) {
+        loop {
+            let new_connection = Self::new_connection(&host).await;
+
+            match new_connection {
+                Ok(new_connection) => {
+                    let mut connection = connection.lock().await;
+                    *connection = new_connection;
+                    drop(connection);
+                    let mut recovering = recovering.lock().await;
+                    *recovering = false;
+                    break;
+                }
+                Err(_) => {
+                    sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
     }
 }
 
 impl TransportClient for QuicClient {
     #[allow(refining_impl_trait)]
     async fn new_transport(&self) -> Result<QuicTransport> {
-        let (send, recv) = self.connection.open_bi().await?;
-        Ok(QuicTransport::new(send, recv))
+        let connection = self.connection.lock().await;
+        let connection_clone = connection.clone();
+        drop(connection);
+
+        match connection_clone.open_bi().await {
+            Ok((send, recv)) => Ok(QuicTransport::new(send, recv)),
+            Err(e) => {
+                let mut recovering = self.recovering.lock().await;
+                if !*recovering {
+                    *recovering = true;
+                    drop(recovering);
+
+                    let connection = self.connection.clone();
+                    let recovering = self.recovering.clone();
+                    let host = self.host.to_string();
+                    tokio::spawn(async move {
+                        Self::recover_connection(connection, recovering, host).await;
+                    });
+                }
+
+                Err(Error::from(e))
+            }
+        }
     }
 }
